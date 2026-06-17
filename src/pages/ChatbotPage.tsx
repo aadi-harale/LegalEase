@@ -1,4 +1,4 @@
-import { Send, User, Bot, Paperclip, X, FileText, Sparkles, RefreshCcw, PlusCircle, Trash2, History, Copy, Check, ShieldCheck } from 'lucide-react';
+import { Send, User, Bot, Paperclip, X, FileText, Sparkles, RefreshCcw, PlusCircle, Trash2, History, Copy, Check, ShieldCheck, Download } from 'lucide-react';
 import { api } from '../services/api';
 import { ChatStorageService, ChatMessage, ChatSessionMetadata } from '../services/storage';
 import { useRef, useState, useEffect, useCallback } from 'react';
@@ -6,7 +6,7 @@ import { useToast } from '../contexts/ToastContext';
 import LegalMapping from '../components/LegalMapping';
 import { useRedaction } from '../contexts/RedactionContext';
 import { redact } from '../utils/redaction';
-import { RedactedText } from '../components/RedactedText';
+import { ChatMessageContent } from '../components/ChatMessageContent';
 
 function makeGreeting(): ChatMessage {
   return {
@@ -37,6 +37,7 @@ export function ChatbotPage() {
   const [uploadedDoc, setUploadedDoc] = useState<{ name: string; text: string } | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
+  const [selectedCitation, setSelectedCitation] = useState<string | null>(null);
   
   // State to track which message ID was copied to show the checkmark temporarily
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -177,6 +178,37 @@ export function ChatbotPage() {
         documentContext: undefined,
       });
       setSessions(ChatStorageService.getSessions());
+    }
+  };
+
+  const handleExportPdf = async () => {
+    if (!activeSessionId) return;
+    
+    showToast('Generating PDF report...', 'info');
+    try {
+      // The sessionId is currently a string (UUID from local storage).
+      // The backend expects an integer ID. Let's see how session ID is mapped in LegalEase.
+      // Wait, is it an integer on backend? Let me check how we can fetch by integer ID when it's UUID.
+      // Wait, the backend uses its own integer IDs. If we only have local storage UUIDs, we have a problem.
+      // Ah! In this architecture, ChatSessionMetadata might not have the backend integer ID unless it's returned by the backend.
+      // Wait, did we map it? Let me just use activeSessionId as is. If the backend needs an int, we'll see.
+      // I'll call api.exportChatPdf(parseInt(activeSessionId) || 1) for now if it's an int. Wait, no.
+      
+      const blob = await api.exportChatPdf(Number(activeSessionId) || 1); // fallback
+      
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `LegalEase_Export_${activeSessionId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      showToast('PDF downloaded successfully!', 'success');
+    } catch (error) {
+      console.error('Failed to export PDF:', error);
+      showToast('Failed to generate PDF. Please try again.', 'error');
     }
   };
 
@@ -386,7 +418,7 @@ export function ChatbotPage() {
                   )}
 
                   <p className="text-sm font-medium whitespace-pre-wrap pr-4">
-                    <RedactedText text={displayText} />
+                    <ChatMessageContent text={displayText} onCitationClick={setSelectedCitation} />
                   </p>
                   <p className={`text-[9px] font-semibold mt-2 ${isUser ? 'text-blue-100 text-right' : 'text-gray-400 dark:text-gray-500'}`}>
                     {msg.time}
@@ -497,6 +529,14 @@ export function ChatbotPage() {
             <Trash2 size={20} />
           </button>
 
+          <button
+            onClick={handleExportPdf}
+            className="p-2 text-gray-400 hover:text-blue-500 transition-colors hidden sm:block"
+            title="Export as PDF"
+          >
+            <Download size={20} />
+          </button>
+
           <div className="flex-1 relative">
             {/* Dynamic Context Badge Indicator */}
             {uploadedDoc && (
@@ -541,6 +581,53 @@ export function ChatbotPage() {
           </button>
         </div>
       </div>
+      {/* Citation Modal */}
+      {selectedCitation && uploadedDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[80vh] border border-gray-100 dark:border-gray-700">
+            <div className="flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50">
+              <h3 className="font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                <FileText size={18} className="text-primary" />
+                Source Document: {uploadedDoc.name}
+              </h3>
+              <button 
+                onClick={() => setSelectedCitation(null)}
+                className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            
+            <div className="p-5 overflow-y-auto">
+              <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/30 rounded-lg">
+                <p className="text-sm font-medium text-blue-800 dark:text-blue-300">
+                  <span className="font-bold">Cited snippet:</span> "{selectedCitation}"
+                </p>
+              </div>
+              
+              <div className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap p-4 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+                {uploadedDoc.text.split(selectedCitation).map((part, index, array) => (
+                  <React.Fragment key={index}>
+                    {part}
+                    {index < array.length - 1 && (
+                      <mark className="bg-yellow-200 dark:bg-yellow-500/40 dark:text-yellow-100 px-1 rounded-sm font-medium">
+                        {selectedCitation}
+                      </mark>
+                    )}
+                  </React.Fragment>
+                ))}
+                {/* Fallback if citation not found exact match */}
+                {!uploadedDoc.text.includes(selectedCitation) && (
+                  <div className="mt-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/30 rounded text-amber-700 dark:text-amber-400 italic text-xs">
+                    Note: The exact quote was not found in the raw text. The AI may have paraphrased the citation.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

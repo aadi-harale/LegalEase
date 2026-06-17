@@ -36,6 +36,7 @@ class ClauseAnalysisItem(BaseModel):
 
 
 class ClauseAnalysisResponse(BaseModel):
+    liabilityScore: int
     clauses: List[ClauseAnalysisItem]
 
 
@@ -54,8 +55,8 @@ async def map_problem(request: ProblemRequest):
 @router.post("/analyze-clauses", response_model=ClauseAnalysisResponse)
 async def analyze_clauses(request: ClauseAnalysisRequest):
     try:
-        clauses = await ai_service.analyze_clauses(request.text)
-        return {"clauses": clauses}
+        result = await ai_service.analyze_clauses(request.text)
+        return result
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

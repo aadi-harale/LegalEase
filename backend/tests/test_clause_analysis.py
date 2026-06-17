@@ -12,7 +12,9 @@ async def test_ai_service_analyze_clauses_stub_mode():
     """Test analyze_clauses returns standard mock data in stub mode"""
     with patch.dict(os.environ, {"STUB_MODE": "true"}):
         ai_service.__init__()
-        clauses = await ai_service.analyze_clauses("This is a sample contract text.")
+        result = await ai_service.analyze_clauses("This is a sample contract text.")
+        assert "liabilityScore" in result
+        clauses = result["clauses"]
         assert len(clauses) == 3
         assert clauses[0]["riskLevel"] == "High"
         assert "terminate" in clauses[0]["clause"]
@@ -22,11 +24,11 @@ async def test_ai_service_analyze_clauses_stub_mode():
 
 @pytest.mark.asyncio
 async def test_ai_service_analyze_clauses_empty_input():
-    """Test analyze_clauses returns empty list on empty input"""
-    clauses = await ai_service.analyze_clauses("")
-    assert clauses == []
-    clauses = await ai_service.analyze_clauses("   ")
-    assert clauses == []
+    """Test analyze_clauses returns empty clauses on empty input"""
+    result = await ai_service.analyze_clauses("")
+    assert result["clauses"] == []
+    result = await ai_service.analyze_clauses("   ")
+    assert result["clauses"] == []
 
 @pytest.mark.asyncio
 async def test_ai_service_analyze_clauses_invalid_json():
@@ -38,7 +40,8 @@ async def test_ai_service_analyze_clauses_invalid_json():
         with patch.object(ai_service, "stub_mode", False):
             # Since graceful_degradation is True by default, it should degrade gracefully
             with patch.object(ai_service, "graceful_degradation", True):
-                clauses = await ai_service.analyze_clauses("Some text")
+                result = await ai_service.analyze_clauses("Some text")
+                clauses = result["clauses"]
                 assert len(clauses) == 1
                 assert clauses[0]["riskLevel"] == "High"
                 assert "fallback" in clauses[0]["riskReason"]

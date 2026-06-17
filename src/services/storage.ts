@@ -15,6 +15,7 @@ export interface Document {
   text?: string;
   extractedText?: string;
   summary?: string;
+  liabilityScore?: number;
   clauses?: ClauseAnalysis[];
 }
 
@@ -105,7 +106,7 @@ export const StorageService = {
     return StorageService.getDocuments().find(d => d.id === id);
   },
 
-  updateDocumentStatus: (id: string, status: 'processed' | 'processing' | 'failed', summary?: string, text?: string, clauses?: ClauseAnalysis[]) => {
+  updateDocumentStatus: (id: string, status: 'processed' | 'processing' | 'failed', summary?: string, text?: string, clauses?: ClauseAnalysis[], liabilityScore?: number) => {
     const docs = StorageService.getDocuments();
     const docIndex = docs.findIndex(d => d.id === id);
     if (docIndex !== -1) {
@@ -121,6 +122,9 @@ export const StorageService = {
       }
       if (clauses !== undefined) {
         docs[docIndex].clauses = clauses;
+      }
+      if (liabilityScore !== undefined) {
+        docs[docIndex].liabilityScore = liabilityScore;
       }
       localStorage.setItem(STORAGE_KEYS.DOCUMENTS, JSON.stringify(docs));
     }

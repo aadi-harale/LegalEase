@@ -2,8 +2,11 @@ import { ClauseAnalysis } from '../services/storage';
 import { useRedactedText } from '../hooks/useRedactedText';
 import { RedactedText } from './RedactedText';
 
+import { DocumentMinimap } from './DocumentMinimap';
+
 interface ClauseAnalysisSectionProps {
   clauses?: ClauseAnalysis[];
+  liabilityScore?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -52,21 +55,42 @@ function ClauseCard({ item }: { item: ClauseAnalysis }) {
   );
 }
 
-export function ClauseAnalysisSection({ clauses }: ClauseAnalysisSectionProps) {
+export function ClauseAnalysisSection({ clauses, liabilityScore }: ClauseAnalysisSectionProps) {
   if (!clauses || clauses.length === 0) {
     return null;
   }
 
+  // Determine score color
+  let scoreColor = 'text-gray-900 dark:text-white';
+  if (liabilityScore !== undefined) {
+    if (liabilityScore > 70) scoreColor = 'text-red-600 dark:text-red-500';
+    else if (liabilityScore > 30) scoreColor = 'text-amber-600 dark:text-amber-500';
+    else scoreColor = 'text-emerald-600 dark:text-emerald-500';
+  }
+
   return (
     <div className="pt-6 border-t border-gray-150 dark:border-gray-850 space-y-4">
-      <h4 className="text-sm font-bold uppercase tracking-wider text-gray-900 dark:text-white">
-        Clause-Level Risk Assessment
-      </h4>
-      <div className="space-y-4">
-        {/* key is placed here — on the mapped element — not inside ClauseCard */}
-        {clauses.map((item, idx) => (
-          <ClauseCard key={idx} item={item} />
-        ))}
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-bold uppercase tracking-wider text-gray-900 dark:text-white">
+          Clause-Level Risk Assessment
+        </h4>
+        {liabilityScore !== undefined && (
+          <div className="text-xs font-semibold bg-gray-100 dark:bg-gray-800 px-3 py-1 rounded-full">
+            Liability Score: <span className={scoreColor}>{liabilityScore}/100</span>
+          </div>
+        )}
+      </div>
+      <div className="flex gap-4">
+        {/* Heatmap Minimap */}
+        <DocumentMinimap clauses={clauses} />
+        
+        {/* Clauses List */}
+        <div className="space-y-4 flex-1">
+          {/* key is placed here — on the mapped element — not inside ClauseCard */}
+          {clauses.map((item, idx) => (
+            <ClauseCard key={idx} item={item} />
+          ))}
+        </div>
       </div>
     </div>
   );

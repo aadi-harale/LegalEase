@@ -264,3 +264,63 @@ async def test_rate_limiting_on_chat():
         if "ALLOW_DEV" in os.environ:
             del os.environ["ALLOW_DEV"]
 
+
+@pytest.mark.asyncio
+async def test_pdf_export_endpoint():
+    """Test exporting a chat session as a PDF"""
+    import os
+    from httpx import AsyncClient, ASGITransport
+    from backend.main import app
+    from backend.models import ChatSession, ChatMessage
+    from backend.auth import AuthIdentity
+    import backend.database
+    import backend.auth
+    
+    os.environ["ALLOW_DEV"] = "true"
+    
+    # Set up mock DB with a chat session and messages
+    mock_session = ChatSession(id=1, user_id=1, title="Test Chat")
+    mock_session.messages = [
+        ChatMessage(id=1, role="user", content="Hello, review this document."),
+        ChatMessage(id=2, role="assistant", content="I will review it for you.")
+    ]
+    
+    class MockQuery:
+        def filter(self, *args, **kwargs):
+            return self
+        def first(self):
+            return mock_session
+
+    class MockDB:
+        def query(self, *args, **kwargs):
+            return MockQuery()
+
+    def get_mock_db():
+        yield MockDB()
+
+    def get_mock_user():
+        class MockUser:
+            id = 1
+        return AuthIdentity(identity_type="user", identifier="test@example.com", user=MockUser())
+    
+    headers = {"x-api-key": "dev-token"}
+    
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        app.dependency_overrides[backend.database.get_db] = get_mock_db
+        app.dependency_overrides[backend.auth.get_current_user] = get_mock_user
+        
+        try:
+            r = await ac.get("/history/chats/1/export/pdf", headers=headers)
+            
+            assert r.status_code == 200
+            assert r.headers["content-type"] == "application/pdf"
+            assert "attachment; filename=\"chat_export_1.pdf\"" in r.headers["content-disposition"]
+            
+            # Verify it's a PDF (starts with %PDF-)
+            assert r.content.startswith(b"%PDF-")
+        finally:
+            app.dependency_overrides.pop(backend.database.get_db, None)
+            app.dependency_overrides.pop(backend.auth.get_current_user, None)
+            if "ALLOW_DEV" in os.environ:
+                del os.environ["ALLOW_DEV"]
+

@@ -146,6 +146,12 @@ class AIService:
                 for msg in history[-10:]
             ])
             parts.append(f"Previous conversation:\n{history_text}")
+        parts.append(
+            "Instructions:\n"
+            "1. Answer the user's question clearly.\n"
+            "2. When referencing specific parts of the 'Context from document', you MUST include inline citations using the exact format: [Citation: \"exact quote from context\"]. For example: 'The agreement allows termination for convenience [Citation: \"The company may terminate this agreement at any time\"].'\n"
+            "3. Ensure quotes are strictly accurate to the context."
+        )
         parts.append(f"Current question: {message}")
         prompt = "\n\n".join(parts)
         
@@ -209,21 +215,25 @@ class AIService:
                 logger.error(f"[{self._get_corr_id()}] Error in summary generation, graceful degradation disabled: {e}")
                 raise
 
-    async def analyze_clauses(self, text: str) -> List[Dict[str, Any]]:
+    async def analyze_clauses(self, text: str) -> Dict[str, Any]:
         """
         Analyze contract clauses and extract key clauses with risk levels and reasons.
         """
         if not text or not text.strip():
-            return []
+            return {"liabilityScore": 0, "clauses": []}
 
         prompt = (
             "Analyze the following legal text and extract up to 5 key clauses. "
             "For each clause, assign a riskLevel ('High', 'Medium', or 'Low') and a riskReason "
             "explaining the risk assignment.\n\n"
-            "You MUST respond ONLY with a valid JSON array of objects, where each object has these exact keys:\n"
-            "  - \"clause\": the exact text of the contract clause\n"
-            "  - \"riskLevel\": the assigned risk level ('High', 'Medium', 'Low')\n"
-            "  - \"riskReason\": a brief explanation of why this risk level was assigned\n\n"
+            "You MUST respond ONLY with a valid JSON object with the following structure:\n"
+            "{\n"
+            "  \"liabilityScore\": an integer from 1 to 100 representing the overall risk of the document (100 being highest risk),\n"
+            "  \"clauses\": an array of objects, where each object has these exact keys:\n"
+            "    - \"clause\": the exact text of the contract clause\n"
+            "    - \"riskLevel\": the assigned risk level ('High', 'Medium', 'Low')\n"
+            "    - \"riskReason\": a brief explanation of why this risk level was assigned\n"
+            "}\n\n"
             "Do not include any other commentary, markdown formatting (outside of valid JSON structure), "
             "or conversational filler. Output must be parsable as JSON.\n\n"
             f"Text to analyze:\n{text}"
@@ -237,23 +247,26 @@ class AIService:
 
         # Check for stub mode
         if self.stub_mode:
-            return [
-                {
-                    "clause": "The company may terminate this agreement at any time without notice.",
-                    "riskLevel": "High",
-                    "riskReason": "Unilateral termination rights may negatively impact the user."
-                },
-                {
-                    "clause": "Subscriber shall indemnify and hold harmless Provider against any and all claims.",
-                    "riskLevel": "Medium",
-                    "riskReason": "Broad indemnification clauses can lead to unexpected liabilities."
-                },
-                {
-                    "clause": "This Agreement shall be governed by the laws of the State of Delaware.",
-                    "riskLevel": "Low",
-                    "riskReason": "Standard governing law clause, standard jurisdiction choice."
-                }
-            ]
+            return {
+                "liabilityScore": 65,
+                "clauses": [
+                    {
+                        "clause": "The company may terminate this agreement at any time without notice.",
+                        "riskLevel": "High",
+                        "riskReason": "Unilateral termination rights may negatively impact the user."
+                    },
+                    {
+                        "clause": "Subscriber shall indemnify and hold harmless Provider against any and all claims.",
+                        "riskLevel": "Medium",
+                        "riskReason": "Broad indemnification clauses can lead to unexpected liabilities."
+                    },
+                    {
+                        "clause": "This Agreement shall be governed by the laws of the State of Delaware.",
+                        "riskLevel": "Low",
+                        "riskReason": "Standard governing law clause, standard jurisdiction choice."
+                    }
+                ]
+            }
 
         try:
             output = await self._execute_with_retry_and_timeout(self.chat_model_name, messages)
@@ -263,16 +276,19 @@ class AIService:
             logger.error(f"[{self._get_corr_id()}] Clause analysis failed: {e}")
             if self.graceful_degradation:
                 # Return standard fallback clauses
-                return [
-                    {
-                        "clause": "The company may terminate this agreement at any time without notice.",
-                        "riskLevel": "High",
-                        "riskReason": "Unilateral termination rights may negatively impact the user (fallback)."
-                    }
-                ]
+                return {
+                    "liabilityScore": 50,
+                    "clauses": [
+                        {
+                            "clause": "The company may terminate this agreement at any time without notice.",
+                            "riskLevel": "High",
+                            "riskReason": "Unilateral termination rights may negatively impact the user (fallback)."
+                        }
+                    ]
+                }
             raise
 
-    def _parse_clauses_json(self, raw_text: str) -> List[Dict[str, Any]]:
+    def _parse_clauses_json(self, raw_text: str) -> Dict[str, Any]:
         import json
         import re
         
@@ -290,9 +306,9 @@ class AIService:
                 
         try:
             parsed = json.loads(cleaned)
-            if isinstance(parsed, list):
+            if isinstance(parsed, dict) and "clauses" in parsed:
                 validated_clauses = []
-                for item in parsed:
+                for item in parsed.get("clauses", []):
                     if isinstance(item, dict) and "clause" in item:
                         # Normalize risk level
                         risk_lvl = str(item.get("riskLevel", "Low")).strip().capitalize()
@@ -304,8 +320,28 @@ class AIService:
                             "riskLevel": risk_lvl,
                             "riskReason": str(item.get("riskReason", "")).strip() or "Analyzed clause."
                         })
-                return validated_clauses
-            return []
+                return {
+                    "liabilityScore": parsed.get("liabilityScore", 50),
+                    "clauses": validated_clauses
+                }
+            # Fallback for old format
+            elif isinstance(parsed, list):
+                validated_clauses = []
+                for item in parsed:
+                    if isinstance(item, dict) and "clause" in item:
+                        risk_lvl = str(item.get("riskLevel", "Low")).strip().capitalize()
+                        if risk_lvl not in ["High", "Medium", "Low"]:
+                            risk_lvl = "Low"
+                        validated_clauses.append({
+                            "clause": str(item.get("clause", "")).strip(),
+                            "riskLevel": risk_lvl,
+                            "riskReason": str(item.get("riskReason", "")).strip() or "Analyzed clause."
+                        })
+                return {
+                    "liabilityScore": 50,
+                    "clauses": validated_clauses
+                }
+            return {"liabilityScore": 50, "clauses": []}
         except Exception as e:
             logger.warning(f"Failed to parse AI JSON response: {e}. Raw response: {raw_text}")
             # Try to find something JSON-like in brackets if the parser failed
@@ -314,14 +350,17 @@ class AIService:
                 if array_match:
                     parsed = json.loads(array_match.group(0))
                     if isinstance(parsed, list):
-                        return [
-                            {
-                                "clause": str(item.get("clause", "")).strip(),
-                                "riskLevel": str(item.get("riskLevel", "Low")).strip().capitalize() if str(item.get("riskLevel", "Low")).strip().capitalize() in ["High", "Medium", "Low"] else "Low",
-                                "riskReason": str(item.get("riskReason", "Analyzed clause.")).strip()
-                            }
-                            for item in parsed if isinstance(item, dict) and "clause" in item
-                        ]
+                        return {
+                            "liabilityScore": 50,
+                            "clauses": [
+                                {
+                                    "clause": str(item.get("clause", "")).strip(),
+                                    "riskLevel": str(item.get("riskLevel", "Low")).strip().capitalize() if str(item.get("riskLevel", "Low")).strip().capitalize() in ["High", "Medium", "Low"] else "Low",
+                                    "riskReason": str(item.get("riskReason", "Analyzed clause.")).strip()
+                                }
+                                for item in parsed if isinstance(item, dict) and "clause" in item
+                            ]
+                        }
             except Exception:
                 pass
             raise ValueError("Invalid JSON response from AI provider")

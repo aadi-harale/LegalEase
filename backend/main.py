@@ -1,9 +1,9 @@
 import asyncio
-from fastapi import Depends, FastAPI, HTTPException, UploadFile, File, Request
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, File, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 import os
 import logging
@@ -11,12 +11,16 @@ import tempfile
 import time
 from typing import Optional
 import uuid
+import json
 
 from dotenv import load_dotenv
 
-from backend.database import engine, Base, SessionLocal
+from backend.database import engine, Base, SessionLocal, get_db
+from sqlalchemy.orm import Session
+from backend import models
 from backend.routers import auth_routes
 from backend.routers import legal_routes
+from backend.routers import history_routes
 from backend.auth import validate_token_or_api_key, AuthIdentity
 from backend.utils.limiter import SimpleRateLimiter
 
@@ -145,6 +149,8 @@ Base.metadata.create_all(bind=engine)
 app.include_router(auth_routes.router)
 # Include legal mapping router
 app.include_router(legal_routes.router)
+# Include history router
+app.include_router(history_routes.router)
 
 
 # Enable CORS for frontend communication
@@ -313,6 +319,27 @@ async def _run_bounded_parser(parser, file_path: str) -> str:
     except asyncio.TimeoutError:
         raise HTTPException(status_code=413, detail="File is too complex to process safely")
 
+async def analyze_document_background(doc_id: int, text: str):
+    db = SessionLocal()
+    try:
+        from backend.services.ai_service import ai_service
+        result = await ai_service.analyze_clauses(text)
+        
+        doc = db.query(models.DocumentRecord).filter(models.DocumentRecord.id == doc_id).first()
+        if doc:
+            doc.liability_score = result.get("liabilityScore", 50)
+            doc.risk_analysis = json.dumps(result.get("clauses", []))
+            doc.status = "completed"
+            db.commit()
+    except Exception as e:
+        logger.error(f"Background analysis failed for doc {doc_id}: {e}")
+        doc = db.query(models.DocumentRecord).filter(models.DocumentRecord.id == doc_id).first()
+        if doc:
+            doc.status = "failed"
+            db.commit()
+    finally:
+        db.close()
+
 
 @app.post("/chat")
 async def chat(request: Request, payload: ChatRequest, identity: AuthIdentity = Depends(validate_token_or_api_key)):
@@ -357,7 +384,13 @@ async def chat(request: Request, payload: ChatRequest, identity: AuthIdentity = 
 
 
 @app.post("/upload")
-async def upload_document(request: Request, file: UploadFile = File(...), identity: AuthIdentity = Depends(validate_token_or_api_key)):
+async def upload_document(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    identity: AuthIdentity = Depends(validate_token_or_api_key),
+    db: Session = Depends(get_db)
+):
     # Content-Length pre-check
     try:
         content_length = int(request.headers.get("content-length", "0"))
@@ -424,7 +457,25 @@ async def upload_document(request: Request, file: UploadFile = File(...), identi
         # Truncate extracted text to avoid sending huge payloads to models
         extracted_text = extracted_text[:MAX_EXTRACTED_TEXT_CHARS]
 
-        return {"filename": filename, "text": extracted_text}
+        doc_id = None
+        user_id = identity.get_user_id()
+        if user_id:
+            new_doc = models.DocumentRecord(
+                user_id=user_id,
+                filename=filename,
+                file_type=file.content_type or "",
+                summary="",
+                status="processing"
+            )
+            db.add(new_doc)
+            db.commit()
+            db.refresh(new_doc)
+            doc_id = new_doc.id
+            
+            # Queue background task
+            background_tasks.add_task(analyze_document_background, doc_id, extracted_text)
+
+        return {"filename": filename, "text": extracted_text, "document_id": doc_id}
 
     except ValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -462,7 +513,7 @@ async def health():
     """
     health_data = ai_service.check_health()
     uptime = time.monotonic() - _app_start_time
-    timestamp = datetime.utcnow().isoformat() + "Z"
+    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     # Database connectivity check
     db_status = "ok"

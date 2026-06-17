@@ -76,4 +76,32 @@ export const api = {
 
     return response.json();
   },
+
+  exportChatPdf: async (sessionId: number): Promise<Blob> => {
+    const response = await fetch(`${API_BASE_URL}/history/chats/${sessionId}/export/pdf`, {
+      headers: {
+        ...getAuthHeaders(),
+      },
+    });
+
+    if (!response.ok) {
+      await handleErrorResponse(response, 'Export error');
+    }
+
+    return response.blob();
+  },
+
+  getDocument: async <T>(documentId: number): Promise<T> => {
+    const response = await fetch(`${API_BASE_URL}/history/documents/${documentId}`, {
+      headers: {
+        ...getAuthHeaders(),
+      },
+    });
+
+    if (!response.ok) {
+      await handleErrorResponse(response, 'Document fetch error');
+    }
+
+    return response.json();
+  },
 };

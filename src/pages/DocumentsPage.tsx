@@ -630,7 +630,10 @@ export function DocumentsPage() {
                 <RedactedText text={auditSummaryDisplay} />
               </div>
 
-              <ClauseAnalysisSection clauses={selectedAuditDoc.clauses} />
+              <ClauseAnalysisSection 
+                clauses={selectedAuditDoc.clauses} 
+                liabilityScore={selectedAuditDoc.liabilityScore} 
+              />
 
             </div>
 

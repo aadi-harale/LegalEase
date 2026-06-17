@@ -63,6 +63,7 @@ export function ProcessingPage() {
 
     const executePipeline = async () => {
       let extractedText = '';
+      let serverDocumentId: number | undefined = undefined;
       let chunks: string[] = [];
       const summaries: string[] = [];
 
@@ -72,8 +73,9 @@ export function ProcessingPage() {
         const formData = new FormData();
         formData.append('file', file);
 
-        const uploadData = await api.upload<{ filename: string; text: string }>('/upload', formData);
+        const uploadData = await api.upload<{ filename: string; text: string; document_id?: number }>('/upload', formData);
         extractedText = uploadData.text;
+        serverDocumentId = uploadData.document_id;
         setStage1Status('completed');
       } catch (err) {
         setStage1Status('failed');
@@ -146,11 +148,44 @@ export function ProcessingPage() {
 
         setFinalSummary(compiledBrief);
 
-        // Fetch clause-level risk assessment
+        // Poll clause-level risk assessment
         let analyzedClauses: any[] = [];
+        let liabilityScore: number | undefined = undefined;
         try {
-          const response = await api.post<{ clauses: any[] }>('/legal/analyze-clauses', { text: extractedText });
-          analyzedClauses = response.clauses;
+          if (serverDocumentId !== undefined) {
+            let attempts = 0;
+            const maxAttempts = 30; // 30 seconds
+            while (attempts < maxAttempts) {
+              const docInfo = await api.getDocument<{
+                status: string;
+                liability_score?: number;
+                risk_analysis?: string;
+              }>(serverDocumentId);
+              
+              if (docInfo.status === 'completed') {
+                if (docInfo.risk_analysis) {
+                  try {
+                    analyzedClauses = JSON.parse(docInfo.risk_analysis);
+                  } catch (e) {
+                    console.error('Failed to parse risk analysis JSON', e);
+                  }
+                }
+                liabilityScore = docInfo.liability_score;
+                break;
+              } else if (docInfo.status === 'failed') {
+                throw new Error('Background analysis failed');
+              }
+              
+              // wait 1 second
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              attempts++;
+            }
+          } else {
+             // Fallback for older API or guest
+             const response = await api.post<{ clauses: any[], liabilityScore?: number }>('/legal/analyze-clauses', { text: extractedText });
+             analyzedClauses = response.clauses;
+             liabilityScore = response.liabilityScore;
+          }
         } catch (clauseErr) {
           console.warn('Failed to analyze clauses, falling back to empty clauses array:', clauseErr);
         }
@@ -158,7 +193,7 @@ export function ProcessingPage() {
         setStage4Status('completed');
 
         // Save complete results back to StorageService
-        StorageService.updateDocumentStatus(docId, 'processed', compiledBrief, extractedText, analyzedClauses);
+        StorageService.updateDocumentStatus(docId, 'processed', compiledBrief, extractedText, analyzedClauses, liabilityScore);
         showToast(`"${file.name}" analyzed successfully!`, 'success');
       } catch (err) {
         setStage4Status('failed');

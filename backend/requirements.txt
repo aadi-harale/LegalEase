@@ -1,4 +1,4 @@
-fastapi
+fastapi>=0.109.0
 uvicorn
 bytez
 pydantic
@@ -11,6 +11,7 @@ psycopg2-binary  # Required only for PostgreSQL
 bcrypt
 python-jose[cryptography]
 email-validator
+reportlab
 # Testing dependencies
 pytest
 pytest-asyncio
