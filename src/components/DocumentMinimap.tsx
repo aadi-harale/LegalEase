@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { ClauseAnalysis } from '../services/storage';
 
 interface DocumentMinimapProps {
